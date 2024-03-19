@@ -1,24 +1,24 @@
 package com.github.thoebert.krosbridgecodegen
 
-data class Type(val className: String, val packageName: String? = null) {
+data class Type(val className: String, val packageNames: List<String>? = null) {
     override fun toString(): String {
-        if (packageName == null) return className
-        return "$packageName/$className"
+        if (packageNames == null) return className
+        return "${packageNames.joinToString("/")}/$className"
     }
 
     fun copyWithClassSuffix(classSuffix: String): Type {
-        return this.copy(className = className + classSuffix, packageName = packageName)
+        return this.copy(className = className + classSuffix, packageNames = packageNames)
     }
 }
 
 fun createTypeFromString(packageAndClassName: String): Type {
-    val index = packageAndClassName.lastIndexOf("/")
-    return if (index == -1) {
+    val packages = packageAndClassName.split("/")
+    return if (packages.size == 1) {
         Type(packageAndClassName)
     } else {
         Type(
-            packageName = packageAndClassName.substring(0, index),
-            className = packageAndClassName.substring(index + 1)
+            packageNames = packages.take(packages.lastIndex),
+            className = packages[packages.lastIndex]
         )
     }
 }
@@ -42,7 +42,11 @@ data class Field(
         get() = children.isNotEmpty()
 
     override fun toString(): String {
-        return "$type $name" + (if (value != null) "=$value" else "") + (if (children.size != 0) "\n${children.joinToString("\n") {"\t" + it.toString() }}\n" else "")
+        return "$type $name" + (if (value != null) "=$value" else "") + (if (children.size != 0) "\n${
+            children.joinToString(
+                "\n"
+            ) { "\t" + it.toString() }
+        }\n" else "")
     }
 }
 

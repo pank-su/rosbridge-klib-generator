@@ -30,8 +30,8 @@ class FieldsParser {
             groups.add(mutableListOf())
             return parseField(position + 1, groupPosition = groupPosition + 1)
         }
-        if (lines[position].startsWith("#")) return parseField(position + 1, groupPosition = groupPosition)
-        // regex demonstration: https://regex101.com/r/Fc8wUB/1
+        if (lines[position].trimStart().startsWith("#")) return parseField(position + 1, groupPosition = groupPosition)
+        // regex demonstration: https://regex101.com/r/oTJAJj/1
         val matched =
             Regex("(?<type>[\\w_\\-/]+|[\\d+])(\\[<?=?(?<size>\\d+)?]|<?=?(?<size2>\\d+))?\\s+(?<name>[\\w_\\-/]+)([\\s]{0,}?=[\\s]{0,}(?<value>\\S*[\\w_\\-/]+|[\\d+]))?").find(
                 lines[position]
