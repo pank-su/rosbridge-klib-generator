@@ -1,4 +1,6 @@
-# krosbridge-codegen
+# rosbridge-klib-generator
+
+Fork https://github.com/thoebert/krosbridge-codegen
 
 A code generator for the required message/service data classes for [krosbridge](https://github.com/thoebert/krosbridge). 
 
@@ -22,7 +24,8 @@ Feel free to open a new issue/pull-request about any possible improvement.
 ## Author
 
 * [Timon Höbert](https://github.com/thoebert)
-
+* [Pankov Vasya](https://github.com/pank-su)
+* 
 ## License
 
 This project is licensed under the BSD - see the [License](License) file for details.

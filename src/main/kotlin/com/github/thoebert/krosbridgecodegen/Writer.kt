@@ -4,6 +4,7 @@ import com.squareup.kotlinpoet.*
 import com.squareup.kotlinpoet.ParameterizedTypeName.Companion.parameterizedBy
 import com.squareup.kotlinpoet.ParameterizedTypeName.Companion.plusParameter
 import java.io.File
+import java.io.FileFilter
 
 val primitiveTypes = mapOf(
     Type("bool") to BOOLEAN,
@@ -46,9 +47,9 @@ val requestSuffix = "Request"
 val responseSuffix = "Response"
 val topicSuffix = "Topic"
 
-val serializableAnnotation = ClassName("kotlinx.serialization","Serializable")
+val serializableAnnotation = ClassName("kotlinx.serialization", "Serializable")
 
-class Writer(val packagePrefix : String = ""){
+class Writer(val packagePrefix: String = "") {
     fun writeRosType(folder: File, it: ROSType) {
         when (it) {
             is Message -> writeMessage(folder, it)
@@ -57,29 +58,58 @@ class Writer(val packagePrefix : String = ""){
         }
     }
 
-    fun writeMessage(folder: File, it: Message) {
+    private fun writeMessage(folder: File, it: Message) {
         writeTopicClass(folder, it)
         writeClass(folder, it.name, it.fields, messageClassName)
     }
 
-    fun writeService(folder: File, it: Service) {
+    private fun writeService(folder: File, it: Service) {
         writeServiceClass(folder, it)
         writeClass(folder, it.name.copyWithClassSuffix(requestSuffix), it.request, serviceRequestClassName)
         writeClass(folder, it.name.copyWithClassSuffix(responseSuffix), it.response, serviceResponseClassName)
     }
 
-    fun writeAction(folder: File, it: Action) {
+    private fun writeAction(folder: File, it: Action) {
         writeClass(folder, it.name.copyWithClassSuffix("Goal"), it.goal)
         writeClass(folder, it.name.copyWithClassSuffix("Result"), it.result)
         writeClass(folder, it.name.copyWithClassSuffix("Feedback"), it.feedback)
     }
 
-    fun prefixPackage(packageName : String?) : String {
+    private fun prefixPackage(packageName: String?): String {
         if (packageName == null) return packagePrefix
-        return "$packagePrefix.$packageName"
+        return "$packagePrefix.${packageName}"
     }
 
-    fun writeClass(folder : File, name : Type, fields : List<Field>, parentName : ClassName? = null) {
+    private fun prefixPackage(packageNames: List<String>?): String {
+        if (packageNames == null) return packagePrefix
+        return "$packagePrefix.${packageNames.joinToString(".")}"
+    }
+
+    private fun checkIfTypeExist(type: TypeName, folder: File): Boolean {
+        if (primitiveTypes.containsValue(type) || type == LIST) return true
+        return folder.listFiles(FileFilter { it.name == "$type.kt" })?.isNotEmpty() ?: false
+    }
+
+    private fun writeComplexType(field: Field, folder: File, packageName: List<String>?) {
+        if (!field.isComplex) return
+        if (checkIfTypeExist(mapType(field, currentPackages = field.type.packageNames), folder)) return
+        val classBuilder = TypeSpec.classBuilder(field.type.className)
+        classBuilder.addAnnotation(AnnotationSpec.builder(serializableAnnotation).build())
+        val constructor = FunSpec.constructorBuilder()
+        field.children.filter { it.isVariable }.forEach {
+            val mappedType = mapType(it, field.type.packageNames)
+            constructor.addParameter(it.name, mappedType)
+            classBuilder.addProperty(
+                PropertySpec.builder(it.name, mappedType)
+                    .initializer(it.name).build()
+            )
+            writeComplexType(it, folder, packageName)
+        }
+        classBuilder.primaryConstructor(constructor.build())
+        writeClassToFile(folder, classBuilder, prefixPackage(packageName), field.type.className)
+    }
+
+    private fun writeClass(folder: File, name: Type, fields: List<Field>, parentName: ClassName? = null) {
 
         val classBuilder = TypeSpec.classBuilder(name.className)
         parentName?.let { classBuilder.superclass(it) }
@@ -88,17 +118,19 @@ class Writer(val packagePrefix : String = ""){
 
         val constructor = FunSpec.constructorBuilder()
         fields.filter { it.isVariable }.forEach {
-            val mappedType = mapType(it, name.packageName)
+            val mappedType = mapType(it, name.packageNames)
             constructor.addParameter(it.name, mappedType)
-            classBuilder.addProperty(PropertySpec.builder(it.name, mappedType)
-                    .initializer(it.name).build())
-
+            classBuilder.addProperty(
+                PropertySpec.builder(it.name, mappedType)
+                    .initializer(it.name).build()
+            )
+            writeComplexType(it, folder, name.packageNames)
         }
         classBuilder.primaryConstructor(constructor.build())
 
         val constants = fields.filter { !it.isVariable }
 
-        if (constants.isNotEmpty()){
+        if (constants.isNotEmpty()) {
             val companionObject = TypeSpec.companionObjectBuilder()
             constants.forEach {
                 companionObject.addProperty(
@@ -109,42 +141,51 @@ class Writer(val packagePrefix : String = ""){
             classBuilder.addType(companionObject.build())
         }
 
-        writeClassToFile(folder, classBuilder, prefixPackage(name.packageName), name.className)
+        writeClassToFile(folder, classBuilder, prefixPackage(name.packageNames), name.className)
     }
 
-    private fun writeClassToFile(folder: File, classBuilder : TypeSpec.Builder, packageName: String, className: String){
+    private fun writeClassToFile(folder: File, classBuilder: TypeSpec.Builder, packageName: String, className: String) {
         val file = FileSpec.builder(packageName, className)
         file.addType(classBuilder.build())
         file.build().writeTo(folder)
+
+
     }
 
-    fun mapType(field : Field, currentPackage : String?) : TypeName {
-        if (field.type.equals(Type("Header"))) return ClassName(prefixPackage("std_msgs"),"Header")
-        if (field.type.equals(Type("time"))) return ClassName(prefixPackage("std_msgs.primitive"),"Time")
-        if (field.type.equals(Type("duration"))) return ClassName(prefixPackage("std_msgs.primitive"),"Duration")
-        val baseType = primitiveTypes[field.type] ?: complexType(field, currentPackage)
+    private fun mapType(field: Field, currentPackages: List<String>?): TypeName {
+        if (field.type.equals(Type("Header"))) return ClassName(prefixPackage(listOf("std_msgs.msg")), "Header")
+        if (field.type.equals(Type("time"))) return ClassName(prefixPackage(listOf("primitive.msg")), "Time")
+        if (field.type.equals(Type("duration"))) return ClassName(prefixPackage(listOf("primitive.msg")), "Duration")
+        val baseType = primitiveTypes[field.type] ?: complexType(field, currentPackages)
+
         return if (field.isArray) LIST.parameterizedBy(baseType) else baseType
     }
 
-    fun mapPrimitiveType(name : Type) : ClassName{
+    private fun mapType(field: Field, currentPackage: String?): TypeName {
+        return mapType(field, if (currentPackage != null) listOf(currentPackage) else null)
+    }
+
+    private fun mapPrimitiveType(name: Type): ClassName {
         return primitiveTypes[name] ?: throw IllegalArgumentException("Invalid primitive type $name")
     }
 
-    fun complexType(field : Field, currentPackage : String?) : ClassName {
-        var packageName = field.type.packageName
-        if (packageName == null){
-            packageName = currentPackage
-        } else if (defaultPackages.contains(packageName)){
-            return ClassName("$defaultPackageName.$packageName", field.type.className)
+    private fun complexType(field: Field, currentPackage: List<String>?): ClassName {
+        var packageNames = field.type.packageNames
+        if (packageNames == null) {
+            packageNames = currentPackage
+        } else if (packageNames.any { defaultPackages.contains(it) }) {
+            if (packageNames.last().endsWith("msgs")) packageNames = packageNames.toMutableList().apply { add("msg") }.toList()
+            return ClassName("$defaultPackageName.${packageNames.joinToString(".")}", field.type.className)
         }
-        return ClassName(prefixPackage(packageName), field.type.className)
+        return ClassName(prefixPackage(packageNames), field.type.className)
     }
 
-    fun writeServiceClass(folder: File, service: Service) {
-        val prefixedPackageName = prefixPackage(service.name.packageName)
+    private fun writeServiceClass(folder: File, service: Service) {
+        val prefixedPackageName = prefixPackage(service.name.packageNames)
 
         val requestClassName = ClassName(prefixedPackageName, service.name.copyWithClassSuffix(requestSuffix).className)
-        val responseClassName = ClassName(prefixedPackageName, service.name.copyWithClassSuffix(responseSuffix).className)
+        val responseClassName =
+            ClassName(prefixedPackageName, service.name.copyWithClassSuffix(responseSuffix).className)
 
         val classBuilder = TypeSpec.classBuilder(service.name.className)
 
@@ -165,31 +206,37 @@ class Writer(val packagePrefix : String = ""){
 
 
         val requestFn = FunSpec.builder("call")
+
         requestFn.addModifiers(KModifier.SUSPEND)
-        requestFn.returns(Pair::class.asClassName()
+        requestFn.returns(
+            Pair::class.asClassName()
                 .plusParameter(responseClassName.copy(true))
-                .plusParameter(Boolean::class))
-        val reqParamNames = addParams(service.request, requestFn, service.name.packageName )
+                .plusParameter(Boolean::class)
+        )
+        val reqParamNames = addParams(service.request, requestFn, service.name.packageNames)
         requestFn.addStatement("return super.call(%T(%L))", requestClassName, reqParamNames)
         classBuilder.addFunction(requestFn.build())
 
         val sendResponseFn = FunSpec.builder("sendResponse")
-        val respParamNames = addParams(service.response, sendResponseFn, service.name.packageName)
+        sendResponseFn.addModifiers(KModifier.SUSPEND)
+        val respParamNames = addParams(service.response, sendResponseFn, service.name.packageNames)
         sendResponseFn.addParameter("serviceResult", Boolean::class)
         sendResponseFn.addParameter("serviceId", String::class.asClassName().copy(true))
-        sendResponseFn.addStatement("return super.sendResponse(%T(%L), serviceResult, serviceId)", responseClassName, respParamNames)
+        sendResponseFn.addStatement(
+            "return super.sendResponse(%T(%L), serviceResult, serviceId)",
+            responseClassName,
+            respParamNames
+        )
         classBuilder.addFunction(sendResponseFn.build())
 
         writeClassToFile(folder, classBuilder, prefixedPackageName, service.name.className)
-
     }
 
-    fun writeTopicClass(folder: File, message: Message) {
-        val prefixedPackageName = prefixPackage(message.name.packageName)
+    private fun writeTopicClass(folder: File, message: Message) {
+        val prefixedPackageName = prefixPackage(message.name.packageNames)
 
         val messageClassName = ClassName(prefixedPackageName, message.name.className)
         val topicClassName = ClassName(prefixedPackageName, message.name.copyWithClassSuffix(topicSuffix).className)
-
         val classBuilder = TypeSpec.classBuilder(topicClassName)
 
         val constructor = FunSpec.constructorBuilder()
@@ -205,21 +252,22 @@ class Writer(val packagePrefix : String = ""){
             .addSuperclassConstructorParameter("%S", message.name)
             .addSuperclassConstructorParameter("%T::class", messageClassName)
 
+
         val publishFn = FunSpec.builder("publish")
-        val reqParamNames = addParams(message.fields, publishFn, message.name.packageName)
+        publishFn.addModifiers(KModifier.SUSPEND)
+        val reqParamNames = addParams(message.fields, publishFn, message.name.packageNames)
         publishFn.addStatement("return super.publish(%T(%L))", messageClassName, reqParamNames)
         classBuilder.addFunction(publishFn.build())
 
         writeClassToFile(folder, classBuilder, prefixedPackageName, topicClassName.simpleName)
-
     }
 
-    private fun addParams(fields : List<Field>, fn : FunSpec.Builder, packageName : String?) : String {
-        return fields.filter { it.isVariable }.map { f ->
+    private fun addParams(fields: List<Field>, fn: FunSpec.Builder, packageNames: List<String>?): String {
+        return fields.filter { it.isVariable }.joinToString { f ->
             val pName = f.name
-            fn.addParameter(pName, mapType(f, packageName))
+            fn.addParameter(pName, mapType(f, packageNames))
             pName
-        }.joinToString()
+        }
     }
 
 }
