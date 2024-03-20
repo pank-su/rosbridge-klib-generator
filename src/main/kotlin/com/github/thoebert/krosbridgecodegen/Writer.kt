@@ -3,6 +3,7 @@ package com.github.thoebert.krosbridgecodegen
 import com.squareup.kotlinpoet.*
 import com.squareup.kotlinpoet.ParameterizedTypeName.Companion.parameterizedBy
 import com.squareup.kotlinpoet.ParameterizedTypeName.Companion.plusParameter
+import kotlinx.coroutines.flow.Flow
 import java.io.File
 import java.io.FileFilter
 
@@ -27,6 +28,11 @@ val krosbridgePackageName = "com.github.thoebert.krosbridge"
 val messageClassName = ClassName(krosbridgePackageName, "Message")
 val serviceRequestClassName = ClassName(krosbridgePackageName, "ServiceRequest")
 val serviceResponseClassName = ClassName(krosbridgePackageName, "ServiceResponse")
+val actionGoalClassName = ClassName(krosbridgePackageName, "ActionGoal")
+val actionFeedbackClassName = ClassName(krosbridgePackageName, "ActionFeedback")
+val actionResultClassName = ClassName(krosbridgePackageName, "ActionResult")
+val actionTypeClassName = ClassName(krosbridgePackageName, "ActionType")
+
 val defaultPackageName = "com.github.thoebert.krosbridge.messages"
 val defaultPackages = listOf(
     "actionlib_msgs",
@@ -46,6 +52,10 @@ val defaultPackages = listOf(
 val requestSuffix = "Request"
 val responseSuffix = "Response"
 val topicSuffix = "Topic"
+val goalSuffix = "Goal"
+val resultSuffix = "Result"
+val feedbackSuffix = "Feedback"
+
 
 val serializableAnnotation = ClassName("kotlinx.serialization", "Serializable")
 
@@ -70,9 +80,10 @@ class Writer(val packagePrefix: String = "") {
     }
 
     private fun writeAction(folder: File, it: Action) {
-        writeClass(folder, it.name.copyWithClassSuffix("Goal"), it.goal)
-        writeClass(folder, it.name.copyWithClassSuffix("Result"), it.result)
-        writeClass(folder, it.name.copyWithClassSuffix("Feedback"), it.feedback)
+        writeActionClass(folder, it)
+        writeClass(folder, it.name.copyWithClassSuffix(goalSuffix), it.goal, actionGoalClassName)
+        writeClass(folder, it.name.copyWithClassSuffix(resultSuffix), it.result, actionResultClassName)
+        writeClass(folder, it.name.copyWithClassSuffix(feedbackSuffix), it.feedback, actionFeedbackClassName)
     }
 
     private fun prefixPackage(packageName: String?): String {
@@ -174,7 +185,8 @@ class Writer(val packagePrefix: String = "") {
         if (packageNames == null) {
             packageNames = currentPackage
         } else if (packageNames.any { defaultPackages.contains(it) }) {
-            if (packageNames.last().endsWith("msgs")) packageNames = packageNames.toMutableList().apply { add("msg") }.toList()
+            if (packageNames.last().endsWith("msgs")) packageNames =
+                packageNames.toMutableList().apply { add("msg") }.toList()
             return ClassName("$defaultPackageName.${packageNames.joinToString(".")}", field.type.className)
         }
         return ClassName(prefixPackage(packageNames), field.type.className)
@@ -260,6 +272,90 @@ class Writer(val packagePrefix: String = "") {
         classBuilder.addFunction(publishFn.build())
 
         writeClassToFile(folder, classBuilder, prefixedPackageName, topicClassName.simpleName)
+    }
+
+    private fun writeActionClass(folder: File, action: Action) {
+        val prefixedPackageName = prefixPackage(action.name.packageNames)
+
+        val goalClassName = ClassName(prefixedPackageName, action.name.copyWithClassSuffix(goalSuffix).className)
+        val feedbackClassName =
+            ClassName(prefixedPackageName, action.name.copyWithClassSuffix(feedbackSuffix).className)
+        val resultClassName = ClassName(prefixedPackageName, action.name.copyWithClassSuffix(resultSuffix).className)
+
+
+        val classBuilder = TypeSpec.classBuilder(action.name.className)
+
+        val constructor = FunSpec.constructorBuilder()
+        constructor.addParameter("ros", ClassName(krosbridgePackageName, "Ros"))
+        constructor.addParameter("name", String::class)
+        classBuilder.primaryConstructor(constructor.build())
+
+        classBuilder.superclass(
+            ClassName(krosbridgePackageName, "GenericAction")
+                .plusParameter(goalClassName)
+                .plusParameter(feedbackClassName)
+                .plusParameter(resultClassName)
+        ).addSuperclassConstructorParameter("%N", "ros")
+            .addSuperclassConstructorParameter("%N", "name")
+            .addSuperclassConstructorParameter("%S", action.name)
+            .addSuperclassConstructorParameter("%T::class", goalClassName)
+            .addSuperclassConstructorParameter("%T::class", feedbackClassName)
+            .addSuperclassConstructorParameter("%T::class", resultClassName)
+
+
+        val sendGoalFn = FunSpec.builder("sendGoal")
+
+        sendGoalFn.addModifiers(KModifier.SUSPEND)
+        sendGoalFn.returns(
+            Flow::class.asClassName().plusParameter(
+                actionTypeClassName.copy(false)
+            )
+        )
+        sendGoalFn.addParameter("feedback", BOOLEAN)
+
+        val reqParamNames = addParams(action.goal, sendGoalFn, action.name.packageNames)
+
+        sendGoalFn.addStatement("return super.sendGoal(%T(%L), feedback)", goalClassName, reqParamNames)
+        classBuilder.addFunction(sendGoalFn.build())
+
+        val sendFeedbackFn = FunSpec.builder("sendFeedback")
+        sendFeedbackFn.addModifiers(KModifier.SUSPEND)
+        val sendFeedbackParamNames = addParams(action.feedback, sendFeedbackFn, action.name.packageNames)
+        sendFeedbackFn.addParameter("id", String::class)
+        sendFeedbackFn.addStatement(
+            "return super.sendFeedback(%T(%L), id)",
+            feedbackClassName,
+            sendFeedbackParamNames
+        )
+        classBuilder.addFunction(sendFeedbackFn.build())
+
+
+        val sendResultFn = FunSpec.builder("sendResult")
+        sendResultFn.addModifiers(KModifier.SUSPEND)
+        val sendResultParamNames = addParams(action.result, sendResultFn, action.name.packageNames)
+        sendResultFn.addParameter("id", String::class)
+        sendResultFn.addParameter(ParameterSpec.builder("isResult", Boolean::class).defaultValue("%L", true).build())
+        sendResultFn.addStatement(
+            "return super.sendResult(%T(%L), id, isResult)",
+            resultClassName,
+            sendResultParamNames
+        )
+        classBuilder.addFunction(sendResultFn.build())
+
+
+//        val sendResponseFn = FunSpec.builder("sendResponse")
+//        sendResponseFn.addModifiers(KModifier.SUSPEND)
+//        val respParamNames = addParams(service.response, sendResponseFn, service.name.packageNames)
+//        sendResponseFn.addParameter("serviceResult", Boolean::class)
+//        sendResponseFn.addParameter("serviceId", String::class.asClassName().copy(true))
+//        sendResponseFn.addStatement(
+//            "return super.sendResponse(%T(%L), serviceResult, serviceId)",
+//            responseClassName,
+//            respParamNames
+//        )
+//        classBuilder.addFunction(sendResponseFn.build())
+
+        writeClassToFile(folder, classBuilder, prefixedPackageName, action.name.className)
     }
 
     private fun addParams(fields: List<Field>, fn: FunSpec.Builder, packageNames: List<String>?): String {

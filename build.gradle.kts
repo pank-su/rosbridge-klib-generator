@@ -21,6 +21,7 @@ dependencies {
     implementation("com.github.h0tk3y.betterParse:better-parse:0.4.4")
     implementation("com.squareup:kotlinpoet:1.16.0")
     implementation("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.0")
     testImplementation(kotlin("test"))
 }
 

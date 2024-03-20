@@ -31,9 +31,9 @@ class FieldsParser {
             return parseField(position + 1, groupPosition = groupPosition + 1)
         }
         if (lines[position].trimStart().startsWith("#")) return parseField(position + 1, groupPosition = groupPosition)
-        // regex demonstration: https://regex101.com/r/oTJAJj/1
+        // regex demonstration: https://regex101.com/r/oTJAJj/2
         val matched =
-            Regex("(?<type>[\\w_\\-/]+|[\\d+])(\\[<?=?(?<size>\\d+)?]|<?=?(?<size2>\\d+))?\\s+(?<name>[\\w_\\-/]+)([\\s]{0,}?=[\\s]{0,}(?<value>\\S*[\\w_\\-/]+|[\\d+]))?").find(
+            Regex("(?<type>[\\w_\\-/]+|[\\d+])(?<isArray>\\[<?=?(?<size>\\d+)?]|<?=?(?<size2>\\d+))?\\s+(?<name>[\\w_\\-/]+)([\\s]{0,}?=[\\s]{0,}(?<value>\\S*[\\w_\\-/]+|[\\d+]))?").find(
                 lines[position]
             )
                 ?: return parseField(position + 1)
@@ -50,7 +50,9 @@ class FieldsParser {
             groupPosition = groupPosition,
             nestedLevel
         )).value
-        val size = (matched.groups["size"] ?: matched.groups["size2"])?.value?.toInt() ?: -1
+        val size = (matched.groups["size"] ?: matched.groups["size2"])?.value?.toInt()
+            ?: if (matched.groups["isArray"] == null) -1 else 0
+
         val value = matched.groups["value"]?.value
         val normalType = createTypeFromString(type)
         val field = Field(normalType, name, value = value, arrayLength = size)
