@@ -25,13 +25,13 @@ val primitiveTypes = mapOf(
 )
 
 val krosbridgePackageName = "com.github.thoebert.krosbridge"
-val messageClassName = ClassName(krosbridgePackageName, "Message")
-val serviceRequestClassName = ClassName(krosbridgePackageName, "ServiceRequest")
-val serviceResponseClassName = ClassName(krosbridgePackageName, "ServiceResponse")
-val actionGoalClassName = ClassName(krosbridgePackageName, "ActionGoal")
-val actionFeedbackClassName = ClassName(krosbridgePackageName, "ActionFeedback")
-val actionResultClassName = ClassName(krosbridgePackageName, "ActionResult")
-val actionTypeClassName = ClassName(krosbridgePackageName, "ActionType")
+val messageClassName = ClassName("$krosbridgePackageName.topic", "Message")
+val serviceRequestClassName = ClassName("$krosbridgePackageName.service", "ServiceRequest")
+val serviceResponseClassName = ClassName("$krosbridgePackageName.service", "ServiceResponse")
+val actionGoalClassName = ClassName("$krosbridgePackageName.action", "ActionGoal")
+val actionFeedbackClassName = ClassName("$krosbridgePackageName.action", "ActionFeedback")
+val actionResultClassName = ClassName("$krosbridgePackageName.action", "ActionResult")
+val actionTypeClassName = ClassName("$krosbridgePackageName.action", "ActionType")
 
 val defaultPackageName = "com.github.thoebert.krosbridge.messages"
 val defaultPackages = listOf(
@@ -92,6 +92,7 @@ class Writer(val packagePrefix: String = "") {
     }
 
     private fun prefixPackage(packageNames: List<String>?): String {
+
         if (packageNames == null) return packagePrefix
         return "$packagePrefix.${packageNames.joinToString(".")}"
     }
@@ -164,10 +165,12 @@ class Writer(val packagePrefix: String = "") {
     }
 
     private fun mapType(field: Field, currentPackages: List<String>?): TypeName {
-        if (field.type.equals(Type("Header"))) return ClassName(prefixPackage(listOf("std_msgs.msg")), "Header")
-        if (field.type.equals(Type("time"))) return ClassName(prefixPackage(listOf("primitive.msg")), "Time")
-        if (field.type.equals(Type("duration"))) return ClassName(prefixPackage(listOf("primitive.msg")), "Duration")
+        if (field.type == Type("Header")) return ClassName(prefixPackage("std_msgs.msg".split(".")), "Header")
+        if (field.type == Type("time")) return ClassName(prefixPackage("primitive.msg".split(".")), "Time")
+        if (field.type == Type("duration")) return ClassName(prefixPackage("primitive.msg".split(".")), "Duration")
         val baseType = primitiveTypes[field.type] ?: complexType(field, currentPackages)
+        println(field)
+        println(baseType)
 
         return if (field.isArray) LIST.parameterizedBy(baseType) else baseType
     }
@@ -181,14 +184,17 @@ class Writer(val packagePrefix: String = "") {
     }
 
     private fun complexType(field: Field, currentPackage: List<String>?): ClassName {
-        var packageNames = field.type.packageNames
+        var packageNames = field.type.packageNames?.toMutableList()
         if (packageNames == null) {
-            packageNames = currentPackage
+            packageNames = currentPackage?.toMutableList()
         } else if (packageNames.any { defaultPackages.contains(it) }) {
-            if (packageNames.last().endsWith("msgs")) packageNames =
-                packageNames.toMutableList().apply { add("msg") }.toList()
+            if (packageNames?.last() != "msg")
+                packageNames?.add("msg")
             return ClassName("$defaultPackageName.${packageNames.joinToString(".")}", field.type.className)
         }
+        if (packageNames?.last() == "srv") packageNames[packageNames.lastIndex] = "msg"
+        else if (packageNames?.last() != "msg")
+            packageNames?.add("msg")
         return ClassName(prefixPackage(packageNames), field.type.className)
     }
 
@@ -207,7 +213,7 @@ class Writer(val packagePrefix: String = "") {
         classBuilder.primaryConstructor(constructor.build())
 
         classBuilder.superclass(
-            ClassName(krosbridgePackageName, "GenericService")
+            ClassName("$krosbridgePackageName.service", "GenericService")
                 .plusParameter(requestClassName)
                 .plusParameter(responseClassName)
         ).addSuperclassConstructorParameter("%N", "ros")
@@ -257,7 +263,7 @@ class Writer(val packagePrefix: String = "") {
         classBuilder.primaryConstructor(constructor.build())
 
         classBuilder.superclass(
-            ClassName(krosbridgePackageName, "GenericTopic")
+            ClassName("$krosbridgePackageName.topic", "GenericTopic")
                 .plusParameter(messageClassName)
         ).addSuperclassConstructorParameter("%N", "ros")
             .addSuperclassConstructorParameter("%N", "name")
@@ -291,7 +297,7 @@ class Writer(val packagePrefix: String = "") {
         classBuilder.primaryConstructor(constructor.build())
 
         classBuilder.superclass(
-            ClassName(krosbridgePackageName, "GenericAction")
+            ClassName("$krosbridgePackageName.action", "GenericAction")
                 .plusParameter(goalClassName)
                 .plusParameter(feedbackClassName)
                 .plusParameter(resultClassName)
@@ -341,19 +347,6 @@ class Writer(val packagePrefix: String = "") {
             sendResultParamNames
         )
         classBuilder.addFunction(sendResultFn.build())
-
-
-//        val sendResponseFn = FunSpec.builder("sendResponse")
-//        sendResponseFn.addModifiers(KModifier.SUSPEND)
-//        val respParamNames = addParams(service.response, sendResponseFn, service.name.packageNames)
-//        sendResponseFn.addParameter("serviceResult", Boolean::class)
-//        sendResponseFn.addParameter("serviceId", String::class.asClassName().copy(true))
-//        sendResponseFn.addStatement(
-//            "return super.sendResponse(%T(%L), serviceResult, serviceId)",
-//            responseClassName,
-//            respParamNames
-//        )
-//        classBuilder.addFunction(sendResponseFn.build())
 
         writeClassToFile(folder, classBuilder, prefixedPackageName, action.name.className)
     }
